@@ -111,6 +111,7 @@ export class QuackamoleRTCClient {
     if (!this.socket) return new Error('socket undefined');
     if (this.socket && !this.socketId) return new Error('socket id undefined');
     if (this.socket.readyState !== WebSocket.OPEN) return new Error('socket not open');
+    if (this.currentRoom?.id === roomId) return new Error('already in room');
     const [awaitId, promise] = this.registerAwaitIdPromise<Q.IRoomJoinResponseMessage>();
     const message: Q.IRoomJoinMessage = { action: 'room_join', awaitId, data: { roomId } };
     this.socket.send(JSON.stringify(message));
