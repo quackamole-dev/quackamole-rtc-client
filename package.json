@@ -1,0 +1,27 @@
+{
+  "name": "quackamole-rtc-client",
+  "private": false,
+  "version": "0.0.1",
+  "type": "module",
+  "main": "./dist/quackamole-rtc-client.umd.cjs",
+  "module": "./dist/quackamole-rtc-client.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/quackamole-rtc-client.js",
+      "require": "./dist/quackamole-rtc-client.umd.cjs"
+    }
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "@types/node": "^20.4.1",
+    "quackamole-shared-types": "^0.0.3",
+    "typescript": "^5.0.2",
+    "vite": "^4.4.0",
+    "vite-plugin-dts": "^3.2.0"
+  }
+}
