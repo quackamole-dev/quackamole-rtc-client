@@ -1,6 +1,8 @@
 import * as Q from 'quackamole-shared-types';
+import { QuackamoleHttpClient } from '.';
 
 export class QuackamoleRTCClient {
+  readonly http = QuackamoleHttpClient;
   private socket: WebSocket;
   private socketId: string | null = null;
   private currentRoom: Q.IBaseRoom | null = null;
@@ -20,6 +22,7 @@ export class QuackamoleRTCClient {
   private readonly iframeContainerLocator: string;
 
   constructor(url: string, iframeContainerLocator: string) {
+    this.http.baseUrl = url;
     console.log('QuackamoleRTCClient constructor', url);
     this.socket = new WebSocket(url);
     this.socket.onmessage = evt => this.handleSocketMessages(evt.data);
