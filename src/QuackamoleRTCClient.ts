@@ -21,10 +21,10 @@ export class QuackamoleRTCClient {
   private readonly users: Map<Q.IUser['id'], Q.IUser> = new Map();
   private readonly iframeContainerLocator: string;
 
-  constructor(url: string, iframeContainerLocator: string) {
-    this.http.baseUrl = url;
-    console.log('QuackamoleRTCClient constructor', url);
-    this.socket = new WebSocket(url);
+  constructor(baseUrl: string, secure: boolean, iframeContainerLocator: string) {
+    this.http.baseUrl = `${secure ? 'https' : 'http'}://${baseUrl}`;
+    console.log('QuackamoleRTCClient baseUrl:', baseUrl, 'secure:', secure);
+    this.socket = new WebSocket(`${secure ? 'wss' : 'ws'}://${baseUrl}`);
     this.socket.onmessage = evt => this.handleSocketMessages(evt.data);
     this.socket.onopen = evt => this.onsocketstatus('open', evt);
     this.socket.onclose = evt => this.onsocketstatus('closed', evt);
