@@ -17,7 +17,7 @@ export class QuackamoleRTCClient {
   private readonly connections: Map<Q.IUser['id'], Q.PeerConnection> = new Map();
   private readonly streams: Map<Q.IUser['id'], MediaStream> = new Map();
   private readonly users: Map<Q.IUser['id'], Q.IUser> = new Map();
-  private readonly iframeContainerLocator: any;
+  private readonly iframeContainerLocator: string;
 
   constructor(url: string, iframeContainerLocator: string) {
     console.log('QuackamoleRTCClient constructor', url);
@@ -30,11 +30,11 @@ export class QuackamoleRTCClient {
     window.addEventListener('message', evt => evt.data.type && evt.data.type.startsWith('PLUGIN') && this.handlePluginMessageLegacy(evt.data));
   }
 
-  onconnection = (id: string, connection: Q.PeerConnection | null) => { };
-  onremoteuserdata = (id: string, userData: Q.IUser | null) => { };
-  onlocaluserdata = (userData: Q.IUser) => { };
-  onsocketstatus = (status: 'open' | 'closed' | 'error', evt?: Event) => { };
-  onsetplugin = (plugin: Q.IPlugin | null, iframeId: string) => { };
+  onconnection = (id: string, connection: Q.PeerConnection | null) => console.debug('onconnection', id, connection);
+  onremoteuserdata = (id: string, userData: Q.IUser | null) => console.debug('onremoteuserdata', id, userData);
+  onlocaluserdata = (userData: Q.IUser) => console.debug('onlocaluserdata', userData);
+  onsocketstatus = (status: 'open' | 'closed' | 'error', evt?: Event) => console.debug('onsocketstatus', status, evt);
+  onsetplugin = (plugin: Q.IPlugin | null, iframeId: string) => console.debug('onsetplugin', plugin, iframeId);
 
   async toggleMicrophoneEnabled(): Promise<void> {
     this.localStreamMicEnabled = !this.localStreamMicEnabled;
@@ -54,7 +54,7 @@ export class QuackamoleRTCClient {
     if (this.iframe?.src && this.iframe.src === plugin.url) return;
     if (!this.iframe) {
       this.iframe = document.createElement('iframe');
-      this.iframe.style.cssText = `width: 100%; height: 100%; border: none`;
+      this.iframe.style.cssText = 'width: 100%; height: 100%; border: none';
       document.querySelector(this.iframeContainerLocator)?.appendChild(this.iframe);
       if (!document.body.contains(this.iframe)) throw new Error(`iframe could not be attached to locator: "${this.iframeContainerLocator}"`);
     }
@@ -99,7 +99,7 @@ export class QuackamoleRTCClient {
     this.socket.send(JSON.stringify(message));
     const response = await promise;
     if (response.errors?.length) return new Error(response.errors?.join(', '));
-    console.log('loginUser success with socketId', response)
+    console.log('loginUser success with socketId', response);
     this.socketId = response.user.id;
     this.localUser = response.user;
     this.localUser.stream = this.localStream;
@@ -158,7 +158,7 @@ export class QuackamoleRTCClient {
       this.onlocaluserdata({ ...this.localUser });
       return new Error('local stream couldn\'t be started');
     }
-  };
+  }
 
   private async stopLocalStream() {
     if (!this.localStream) return;
@@ -166,7 +166,7 @@ export class QuackamoleRTCClient {
     this.clearStreamTracks(this.localStream);
     this.localStream = undefined;
     this.updateStreamForConnections(this.localStream);
-  };
+  }
 
   private async updateStreamForConnections(newStream?: MediaStream): Promise<void> {
     const promises: Promise<void>[] = [];
@@ -210,10 +210,10 @@ export class QuackamoleRTCClient {
   }
 
   handleSetPlugin({ roomId, iframeId, plugin }: Q.IRoomEventPluginSet['data']) {
-    console.log(`remote user set plugin ${plugin?.url} for ${iframeId}`, this.iframe);
+    console.log(`remote user set plugin ${plugin?.url} for ${iframeId} and roomId ${roomId}`, this.iframe);
     if (!this.iframe) {
       this.iframe = document.createElement('iframe');
-      this.iframe.style.cssText = `width: 100%; height: 100%; border: none`;
+      this.iframe.style.cssText = 'width: 100%; height: 100%; border: none';
       document.querySelector(this.iframeContainerLocator)?.appendChild(this.iframe);
       if (!document.body.contains(this.iframe)) throw new Error(`iframe could not be attached to locator: "${this.iframeContainerLocator}"`);
     }
@@ -273,7 +273,7 @@ export class QuackamoleRTCClient {
     const data = { type: 'PLUGIN_DATA', payload: message.payload };
     console.log('-------------LEGACY PLUGIN MESSAGE---', data, this.connections);
     this.connections.forEach(c => this.sendDataToConnection(c.defaultDataChannel, data));
-  };
+  }
 
   private sendPluginMessageToConnection(message: Q.IPluginMessageLegacy) {
     const connection = this.connections.get(message.socketId);
@@ -282,7 +282,7 @@ export class QuackamoleRTCClient {
     this.sendDataToConnection(connection.defaultDataChannel, data);
   }
 
-  sendDataToConnection(dataChannel: RTCDataChannel, data: { type: string; payload: any; }) {
+  sendDataToConnection(dataChannel: RTCDataChannel, data: { type: string; payload: unknown; }) {
     console.log('---------send to connection', dataChannel, data);
     if (!dataChannel) return;
     const serializedData = JSON.stringify(data);
@@ -322,7 +322,7 @@ export class QuackamoleRTCClient {
       const tracks = this.localStream.getTracks();
       console.log(`Adding ${tracks.length}x stream tracks to the new RTCPeerConnection with "${remoteSocketId}"...`);
       for (const track of tracks) newConnection.addTrack(track, this.localStream);
-    };
+    }
 
 
     // this.sendSessionDescriptionToConnection(newConnection, isOffer);
@@ -348,7 +348,7 @@ export class QuackamoleRTCClient {
     if (!this.socketId) return;
     if (!this.currentRoom) return;
 
-    console.log(`Initializing RTCPeerConnection listeners...`);
+    console.log('Initializing RTCPeerConnection listeners...');
     const DELAY_MULTIPLIER = 1.5;
     const BASE_DELAY = 450;
     const MAX_ITERATIONS = 9;
@@ -381,9 +381,9 @@ export class QuackamoleRTCClient {
       }
     };
 
-    connection.ontrack = ({ track, streams }) => {
+    connection.ontrack = ({ streams }) => {
       if (!streams || !streams[0]) return console.error('ontrack - this should not happen... streams[0] is empty!');
-      this.streams.set(connection.remoteSocketId, streams[0])
+      this.streams.set(connection.remoteSocketId, streams[0]);
 
       const user = this.users.get(connection.remoteSocketId);
       if (!user) return; // no use in continuing when user not loaded yet
@@ -394,7 +394,7 @@ export class QuackamoleRTCClient {
 
     connection.onnegotiationneeded = () => console.log(`(negotiationneeded for connection "${connection.remoteSocketId}"...)`);
     connection.oniceconnectionstatechange = () => connection.iceConnectionState === 'failed' && connection.restartIce();
-    connection.onsignalingstatechange = evt => connection.signalingState === 'stable' && connection.localDescription && connection.remoteDescription && console.log('CONNECTION ESTABLISHED!! signaling state:', connection.signalingState);
+    connection.onsignalingstatechange = () => connection.signalingState === 'stable' && connection.localDescription && connection.remoteDescription && console.log('CONNECTION ESTABLISHED!! signaling state:', connection.signalingState);
     connection.ondatachannel = async evt => {
       console.log('Remote peer opened a data channel with you...', evt);
       connection.defaultDataChannel = evt.channel;
@@ -404,23 +404,24 @@ export class QuackamoleRTCClient {
 
   private setupDataChannelListeners(dataChannel: RTCDataChannel) {
     if (!dataChannel) return;
-    console.log(`Initializing data channel listeners...`);
+    console.log('Initializing data channel listeners...');
     dataChannel.onopen = () => console.log('datachannel open...');
     dataChannel.onclose = () => console.log('datachannel close');
     dataChannel.onerror = evt => console.log('datachannel error:', evt);
     dataChannel.onmessage = evt => this.handleDataChannelMessages(evt.data);
-  };
+  }
 
   private clearStreamTracks = (stream?: MediaStream) => {
     if (!stream) return;
     if (!stream.getTracks) return console.error('something wrong with the stream:', stream);
     stream.getTracks().forEach(track => track.stop());
-  }
+  };
 
   private registerAwaitIdPromise<T>(awaitId = crypto.randomUUID()): [Q.AwaitId, Promise<T>] {
-    let resolve: Q.IAwaitedPromise['resolve'] = () => { };
-    let reject: Q.IAwaitedPromise['resolve'] = () => { };
+    let resolve: Q.IAwaitedPromise['resolve'] = () => console.debug('resolve not set');
+    let reject: Q.IAwaitedPromise['resolve'] = () => console.debug('reject not set');
     const promise: Promise<T> = new Promise((res, rej) => {
+      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
       // @ts-ignore
       resolve = res;
       reject = rej;

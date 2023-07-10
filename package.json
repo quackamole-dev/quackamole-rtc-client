@@ -1,7 +1,6 @@
 {
   "name": "quackamole-rtc-client",
-  "private": false,
-  "version": "0.0.1",
+  "version": "0.0.2",
   "type": "module",
   "main": "./dist/quackamole-rtc-client.umd.cjs",
   "module": "./dist/quackamole-rtc-client.js",
@@ -12,13 +11,20 @@
       "require": "./dist/quackamole-rtc-client.umd.cjs"
     }
   },
+  "files": [
+    "dist"
+  ],
   "scripts": {
+    "lint": "eslint src",
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview"
   },
   "devDependencies": {
     "@types/node": "^20.4.1",
+    "@typescript-eslint/eslint-plugin": "^5.61.0",
+    "@typescript-eslint/parser": "^5.61.0",
+    "eslint": "^8.44.0",
     "quackamole-shared-types": "^0.0.3",
     "typescript": "^5.0.2",
     "vite": "^4.4.0",
