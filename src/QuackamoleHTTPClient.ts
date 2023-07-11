@@ -8,7 +8,7 @@ export class QuackamoleHttpClient {
 
   static async createRoom(): Promise<IAdminRoom | Error> {
     try {
-      const res = await fetch(`${this.baseUrl}/rooms`, { method: 'post', mode: 'cors' });
+      const res = await fetch(`${QuackamoleHttpClient.baseUrl}/rooms`, { method: 'post', mode: 'cors' });
       return await res.json();
     } catch (e) {
       return new Error('failed to create room');
@@ -17,7 +17,7 @@ export class QuackamoleHttpClient {
 
   static async getRoom(id: string): Promise<IBaseRoom> {
     try {
-      const res = await fetch(`${this.baseUrl}/rooms/${id}`, { method: 'get', mode: 'cors' });
+      const res = await fetch(`${QuackamoleHttpClient.baseUrl}/rooms/${id}`, { method: 'get', mode: 'cors' });
       return await res.json();
     } catch (e) {
       throw new Error('failed to get room');
@@ -26,7 +26,7 @@ export class QuackamoleHttpClient {
 
   static async getPlugins(): Promise<IPlugin[]> {
     try {
-      const res = await fetch(`${this.baseUrl}/plugins`, { method: 'get', mode: 'cors' });
+      const res = await fetch(`${QuackamoleHttpClient.baseUrl}/plugins`, { method: 'get', mode: 'cors' });
       return await res.json();
     } catch (e) {
       throw new Error('failed to fetch plugins');

@@ -24,7 +24,7 @@ export class QuackamoleRTCClient {
   constructor(baseUrl: string, secure: boolean, iframeContainerLocator: string) {
     this.http.baseUrl = `${secure ? 'https' : 'http'}://${baseUrl}`;
     console.log('QuackamoleRTCClient baseUrl:', baseUrl, 'secure:', secure);
-    this.socket = new WebSocket(`${secure ? 'wss' : 'ws'}://${baseUrl}`);
+    this.socket = new WebSocket(`${secure ? 'wss' : 'ws'}://${baseUrl}/ws`);
     this.socket.onmessage = evt => this.handleSocketMessages(evt.data);
     this.socket.onopen = evt => this.onsocketstatus('open', evt);
     this.socket.onclose = evt => this.onsocketstatus('closed', evt);
