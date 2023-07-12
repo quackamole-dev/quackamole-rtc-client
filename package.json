@@ -1,6 +1,6 @@
 {
   "name": "quackamole-rtc-client",
-  "version": "0.0.8",
+  "version": "0.1.0",
   "type": "module",
   "main": "./dist/quackamole-rtc-client.umd.cjs",
   "module": "./dist/quackamole-rtc-client.js",
@@ -25,7 +25,7 @@
     "@typescript-eslint/eslint-plugin": "^5.61.0",
     "@typescript-eslint/parser": "^5.61.0",
     "eslint": "^8.44.0",
-    "quackamole-shared-types": "^0.0.3",
+    "quackamole-shared-types": "^0.1.0",
     "typescript": "^5.0.2",
     "vite": "^4.4.0",
     "vite-plugin-dts": "^3.2.0"

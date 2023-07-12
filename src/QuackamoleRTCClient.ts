@@ -63,7 +63,7 @@ export class QuackamoleRTCClient {
     }
 
     const [awaitId, promise] = this.registerAwaitIdPromise<Q.IPluginSetResponseMessage>();
-    const message: Q.IPluginSetMessage = { action: 'plugin_set', awaitId, data: { plugin, iframeId: this.iframe.id, roomId: this.currentRoom.id } };
+    const message: Q.IPluginSetMessage = { type: 'request__plugin_set', awaitId, body: { plugin, iframeId: this.iframe.id, roomId: this.currentRoom.id } };
     this.socket.send(JSON.stringify(message));
     const res = await promise;
     console.log('--------set plugin res', res);
@@ -78,11 +78,11 @@ export class QuackamoleRTCClient {
     if (this.socket.readyState !== WebSocket.OPEN) return new Error('socket not open');
 
     const [awaitId, promise] = this.registerAwaitIdPromise<Q.IUserRegisterResponseMessage>();
-    const message: Q.IUserRegisterMessage = { action: 'user_register', awaitId, data: { displayName } };
+    const message: Q.IUserRegisterMessage = { type: 'request__user_register', awaitId, body: { displayName } };
     this.socket.send(JSON.stringify(message));
     const response = await promise;
 
-    if (response.errors?.length) return new Error(response.errors?.join(', '));
+    // if (response.errors?.length) return new Error(response.errors?.join(', '));
     if (response.secret.length === 0) return new Error('secret is empty');
 
     localStorage.setItem('secret', response.secret);
@@ -98,10 +98,10 @@ export class QuackamoleRTCClient {
     if (!this.socket) return new Error('socket undefined');
     if (this.socket.readyState !== WebSocket.OPEN) return new Error('socket not open');
     const [awaitId, promise] = this.registerAwaitIdPromise<Q.IUserLoginResponseMessage>();
-    const message: Q.IUserLoginMessage = { action: 'user_login', awaitId, data: { secret } };
+    const message: Q.IUserLoginMessage = { type: 'request__user_login', awaitId, body: { secret } };
     this.socket.send(JSON.stringify(message));
     const response = await promise;
-    if (response.errors?.length) return new Error(response.errors?.join(', '));
+    // if (response.errors?.length) return new Error(response.errors?.join(', '));
     console.log('loginUser success with socketId', response);
     this.socketId = response.user.id;
     this.localUser = response.user;
@@ -116,10 +116,10 @@ export class QuackamoleRTCClient {
     if (this.socket.readyState !== WebSocket.OPEN) return new Error('socket not open');
     if (this.currentRoom?.id === roomId) return new Error('already in room');
     const [awaitId, promise] = this.registerAwaitIdPromise<Q.IRoomJoinResponseMessage>();
-    const message: Q.IRoomJoinMessage = { action: 'room_join', awaitId, data: { roomId } };
+    const message: Q.IRoomJoinMessage = { type: 'request__room_join', awaitId, body: { roomId } };
     this.socket.send(JSON.stringify(message));
     const response = await promise;
-    if (response.errors?.length) return new Error(response.errors?.join(', '));
+    // if (response.errors?.length) return new Error(response.errors?.join(', '));
     this.currentRoom = response.room;
     response.users.forEach(u => {
       if (u.id === this.localUser?.id) return;
@@ -184,23 +184,19 @@ export class QuackamoleRTCClient {
   }
 
   private handleSocketMessages(messageRaw: string) {
-    const m = JSON.parse(messageRaw);
+    const m: Q.ServerToSocketMessage = JSON.parse(messageRaw);
     console.log('handleSocketMessages', m);
-
     // messages with an awaitId are handled wherever they are awaited.
-    if (m.awaitId) return m.errors?.length ? this.awaitedPromises[m.awaitId].reject(m.errors) : this.awaitedPromises[m.awaitId].resolve(m);
-
+    if (m.awaitId) return m.type === 'response__error' ? this.awaitedPromises[m.awaitId].reject(m) : this.awaitedPromises[m.awaitId].resolve(m);
     if (m.type === 'message_relay_delivery') {
-      if (m.data?.iceCandidates) return this.handleRTCIceCandidates(m);
-      else if (m.data?.description) return this.handleSessionDescription(m);
+      // TODO fix this mess
+      if ((m as Q.IMessageRelayDeliveryMessage<Q.IRTCIceCandidatesMessage>).relayData?.type === 'ice_candidates') return this.handleRTCIceCandidates(m as Q.IMessageRelayDeliveryMessage<Q.IRTCIceCandidatesMessage>);
+      if ((m as Q.IMessageRelayDeliveryMessage<Q.IRTCSessionDescriptionMessage>).relayData?.type === 'session_description') return this.handleSessionDescription(m as Q.IMessageRelayDeliveryMessage<Q.IRTCSessionDescriptionMessage>);
     }
-
-    if (m.type === 'room_event') {
-      if (m.eventType === 'user_joined') return this.handleUserJoined(m.data);
-      else if (m.eventType === 'user_left') return this.handleUserLeft(m.data);
-      else if (m.eventType === 'plugin_set') return this.handleSetPlugin(m.data);
-      // else if (m.eventType === 'layout_changed') return this.handleLayoutChange(m.data.user);
-    }
+    if (m.type === 'room_event__user_joined') return this.handleUserJoined(m.data);
+    else if (m.type === 'room_event__user_left') return this.handleUserLeft(m.data);
+    else if (m.type === 'room_event__plugin_set') return this.handleSetPlugin(m.data);
+    // else if (m.type === 'room_event__layout_changed') return this.handleLayoutChange(m.data.user);
   }
 
   private async handleUserJoined({ user }: Q.IRoomEventJoinMessage['data']) {
@@ -213,8 +209,8 @@ export class QuackamoleRTCClient {
     this.removeConnection(user.id);
   }
 
-  handleSetPlugin({ roomId, iframeId, plugin }: Q.IRoomEventPluginSet['data']) {
-    console.log(`remote user set plugin ${plugin?.url} for ${iframeId} and roomId ${roomId}`, this.iframe);
+  handleSetPlugin({ iframeId, plugin }: Q.IRoomEventPluginSet['data']) {
+    console.log(`remote user set plugin ${plugin?.url} for ${iframeId}`, this.iframe);
     if (!this.iframe) {
       this.iframe = document.createElement('iframe');
       this.iframe.style.cssText = 'width: 100%; height: 100%; border: none';
@@ -232,21 +228,21 @@ export class QuackamoleRTCClient {
     if (!this.socketId) return console.error('handleSessionDescription - socketId not set');
     if (!this.currentRoom) return console.error('handleSessionDescription - currentRoom not set');
 
-    if (message.data.description.type === 'offer') {
+    if (message.relayData.description.type === 'offer') {
       console.log(`You received an OFFER from "${message.senderId}"...`);
       if (!connection) connection = await this.createConnection(message.senderId, false);
-      await connection.setRemoteDescription(new RTCSessionDescription(message.data.description));
+      await connection.setRemoteDescription(new RTCSessionDescription(message.relayData.description));
       await this.sendSessionDescriptionToConnection(connection, false);
       // When remote user disabled both cam and mic, we need to remove the stream here otherwise it remains stuck on last frame here.
       const user = this.users.get(message.senderId);
-      if (user && !message.data.streamEnabled) {
+      if (user && !message.relayData.streamEnabled) {
         user.stream = undefined;
         this.onremoteuserdata(message.senderId, { ...user });
       }
-    } else if (message.data.description.type === 'answer') {
+    } else if (message.relayData.description.type === 'answer') {
       if (!connection) return console.error('No offer was ever made for the received answer. Investigate!');
       console.log(`You received an ANSWER from "${message.senderId}"...`);
-      await connection.setRemoteDescription(new RTCSessionDescription(message.data.description));
+      await connection.setRemoteDescription(new RTCSessionDescription(message.relayData.description));
     }
   }
 
@@ -254,7 +250,7 @@ export class QuackamoleRTCClient {
     const connection = this.connections.get(message.senderId);
     console.log(`You received ICE CANDIDATES from "${message.senderId}"...`, connection, message);
     if (!connection) return console.error('handleRTCIceCandidates - connection not found');
-    for (const candidate of message.data.iceCandidates) await connection.addIceCandidate(candidate);
+    for (const candidate of message.relayData.iceCandidates) await connection.addIceCandidate(candidate);
   }
 
   private handleDataChannelMessages(messageRaw: string) {
@@ -300,8 +296,8 @@ export class QuackamoleRTCClient {
     const description = isOffer ? await connection.createOffer() : await connection.createAnswer();
     await connection.setLocalDescription(description);
     console.log('Sending description to remote peer...', description);
-    const data: Q.IRTCSessionDescriptionMessage = { type: 'session_description', description, senderSocketId: this.socketId, micEnabled: this.localStreamMicEnabled, camEnabled: this.localStreamCamEnabled, streamEnabled: Boolean(this.localStream) };
-    const message: Q.IMessageRelayMessage = { action: 'message_relay', receiverIds: [connection.remoteSocketId], roomId: this.currentRoom?.id, data };
+    const relayData: Q.IRTCSessionDescriptionMessage  = { type: 'session_description', description, senderSocketId: this.socketId, micEnabled: this.localStreamMicEnabled, camEnabled: this.localStreamCamEnabled, streamEnabled: Boolean(this.localStream) };
+    const message: Q.IMessageRelayMessage<Q.IRTCSessionDescriptionMessage> = { type: 'request__message_relay', awaitId: '', body: { receiverIds: [connection.remoteSocketId], roomId: this.currentRoom?.id, relayData } };
     this.socket.send(JSON.stringify(message));
   };
 
@@ -365,8 +361,8 @@ export class QuackamoleRTCClient {
     const timer = () => { // TODO pass currentIteration as param
       if (iceCandidates.length) {
         console.log(`Sending ${iceCandidates.length}x ICE CANDIDATES to peer...`);
-        const data: Q.IRTCIceCandidatesMessage = { type: 'ice_candidates', iceCandidates, senderSocketId };
-        const message: Q.IMessageRelayMessage = { action: 'message_relay', roomId, data, receiverIds: [connection.remoteSocketId] };
+        const relayData: Q.IRTCIceCandidatesMessage = { type: 'ice_candidates', iceCandidates, senderSocketId };
+        const message: Q.IMessageRelayMessage<Q.IRTCIceCandidatesMessage> = { type: 'request__message_relay', awaitId: '', body: {receiverIds: [connection.remoteSocketId], roomId, relayData} };
         this.socket.send(JSON.stringify(message));
         iceCandidates = [];
       }
@@ -445,3 +441,5 @@ const defaultMediaConstraints: MediaStreamConstraints = {
     height: { ideal: 72 }
   }
 };
+
+// TODO hide away complexity and the fact that we are sending a websocket message for awaited messages, create a lower level base class handling that and inherit from it
