@@ -5,7 +5,8 @@ module.exports = {
   },
   'extends': [
     'eslint:recommended',
-    'plugin:@typescript-eslint/recommended'
+    'plugin:@typescript-eslint/recommended',
+    // 'plugin:import/recommended'
   ],
   'overrides': [
     {
@@ -29,22 +30,12 @@ module.exports = {
     '@typescript-eslint'
   ],
   'rules': {
-    'indent': [
-      'error',
-      2
-    ],
-    // 'linebreak-style': [
-    //     'error',
-    //     'windows',
-    //     'unix'
-    // ],
-    'quotes': [
-      'error',
-      'single'
-    ],
-    'semi': [
-      'error',
-      'always'
-    ]
+    'indent': ['error', 2],
+    'quotes': ['error', 'single'],
+    'semi': ['error', 'always'],
+    'no-multiple-empty-lines': ['error', { 'max': 1, 'maxEOF': 0 }],
+    'no-trailing-spaces': 'error',
+    'no-var': 'error',
+    'eol-last': 'error',
   }
 };

@@ -1,5 +1,6 @@
 import * as Q from 'quackamole-shared-types';
 import { QuackamoleHttpClient } from '.';
+import { IPBroadcastMessage, IPGetCurrentRoom, IPGetCurrentRoomResponse, IPGetLocalUser, IPGetLocalUserResponse, IPGetMetadata, IPGetConnectedUsers, IPGetConnectedUsersResponse, IPMessageEnvelope, IPMessageUserMessage, IPSetCameraEnabled, IPSetMetadata, IPSetMicrophoneEnabled, PluginToHostMessage, IPSetMicrophoneEnabledResponse, IPSetCameraEnabledResponse, IPSetMetadataResponse } from './sharedClientTypes';
 
 export class QuackamoleRTCClient {
   readonly http = QuackamoleHttpClient;
@@ -30,7 +31,7 @@ export class QuackamoleRTCClient {
     this.socket.onclose = evt => this.onsocketstatus('closed', evt);
     this.socket.onerror = evt => this.onsocketstatus('error', evt);
     this.iframeContainerLocator = iframeContainerLocator;
-    window.addEventListener('message', evt => evt.data.type && evt.data.type.startsWith('PLUGIN') && this.handlePluginMessageLegacy(evt.data));
+    window.addEventListener('message', evt => evt.data.type && evt.data.type.startsWith('PLUGIN') && this.handleEmbeddedPluginMessage(evt.data));
   }
 
   onconnection = (id: string, connection: Q.PeerConnection | null) => console.debug('onconnection', id, connection);
@@ -39,12 +40,13 @@ export class QuackamoleRTCClient {
   onsocketstatus = (status: 'open' | 'closed' | 'error', evt?: Event) => console.debug('onsocketstatus', status, evt);
   onsetplugin = (plugin: Q.IPlugin | null, iframeId: string) => console.debug('onsetplugin', plugin, iframeId);
 
-  async toggleMicrophoneEnabled(): Promise<void> {
-    this.localStreamMicEnabled = !this.localStreamMicEnabled;
+  async toggleMicrophoneEnabled(override?: boolean): Promise<void> {
+    this.localStreamMicEnabled =  override !== undefined ? override : !this.localStreamMicEnabled;
     if (this.localStream || this.localStreamMicEnabled) await this.startLocalStream();
   }
 
-  async toggleCameraEnabled(): Promise<void> {
+  async toggleCameraEnabled(override?: boolean): Promise<void> {
+    this.localStreamCamEnabled =  override !== undefined ? override : !this.localStreamCamEnabled;
     this.localStreamCamEnabled = !this.localStreamCamEnabled;
     if (this.localStream || this.localStreamCamEnabled) await this.startLocalStream();
   }
@@ -139,7 +141,7 @@ export class QuackamoleRTCClient {
   }
 
   async startLocalStream(): Promise<MediaStream | Error> {
-    // if (!this.localStreamMicEnabled && !this.localStreamCamEnabled) 
+    // if (!this.localStreamMicEnabled && !this.localStreamCamEnabled)
     const audioTracks = this.localStream?.getAudioTracks();
     const videoTracks = this.localStream?.getVideoTracks();
     if (audioTracks?.length && !this.localStreamMicEnabled) audioTracks.forEach(t => t.stop());
@@ -256,39 +258,8 @@ export class QuackamoleRTCClient {
   private handleDataChannelMessages(messageRaw: string) {
     const message = JSON.parse(messageRaw);
     console.log('handleDataChannelMessages', message);
-
-    if (message.type === 'PLUGIN_DATA') {
-      if (!this.iframe) throw new Error('iframe not set');
-      this.iframe.contentWindow?.postMessage(message, '*');
-      window.postMessage(message, '*'); // TODO remove this why needed?
-    }
+    if (message.type === 'PLUGIN_DATA') this.sendMessageToEmbeddedPlugin(message);
   }
-
-  private handlePluginMessageLegacy(message: Q.IPluginMessageLegacy) {
-    if (message.type === 'PLUGIN_SEND_TO_ALL_PEERS') this.sendPluginMessageToAllConnections(message);
-    else if (message.type === 'PLUGIN_SEND_TO_PEER') this.sendPluginMessageToConnection(message);
-  }
-
-  private sendPluginMessageToAllConnections(message: Q.IPluginMessageLegacy) {
-    const data = { type: 'PLUGIN_DATA', payload: message.payload };
-    console.log('-------------LEGACY PLUGIN MESSAGE---', data, this.connections);
-    this.connections.forEach(c => this.sendDataToConnection(c.defaultDataChannel, data));
-  }
-
-  private sendPluginMessageToConnection(message: Q.IPluginMessageLegacy) {
-    const connection = this.connections.get(message.socketId);
-    if (!connection) return console.error('sendPluginMessageToConnection - connection not found');
-    const data = { type: 'PLUGIN_DATA', payload: message.payload };
-    this.sendDataToConnection(connection.defaultDataChannel, data);
-  }
-
-  sendDataToConnection(dataChannel: RTCDataChannel, data: { type: string; payload: unknown; }) {
-    console.log('---------send to connection', dataChannel, data);
-    if (!dataChannel) return;
-    const serializedData = JSON.stringify(data);
-    dataChannel.send(serializedData);
-  }
-
 
   private sendSessionDescriptionToConnection = async (connection: Q.PeerConnection, isOffer = true) => {
     if (!this.socketId) throw new Error('socketId not set');
@@ -300,6 +271,12 @@ export class QuackamoleRTCClient {
     const message: Q.IMessageRelayMessage<Q.IRTCSessionDescriptionMessage> = { type: 'request__message_relay', awaitId: '', body: { receiverIds: [connection.remoteSocketId], roomId: this.currentRoom?.id, relayData } };
     this.socket.send(JSON.stringify(message));
   };
+
+  private sendMessageToEmbeddedPlugin<T = unknown>(message: T) {
+    if (!this.iframe) throw new Error('iframe not set');
+    this.iframe.contentWindow?.postMessage(message, '*');
+    window.postMessage(message, '*');
+  }
 
   private async createConnection(remoteSocketId: string, createDataChannel = true): Promise<Q.PeerConnection> {
     if (!this.socketId) throw new Error('socketId not defined');
@@ -324,8 +301,6 @@ export class QuackamoleRTCClient {
       for (const track of tracks) newConnection.addTrack(track, this.localStream);
     }
 
-
-    // this.sendSessionDescriptionToConnection(newConnection, isOffer);
     return newConnection;
   }
 
@@ -428,6 +403,77 @@ export class QuackamoleRTCClient {
     });
     this.awaitedPromises[awaitId] = { promise, resolve, reject };
     return [awaitId, promise];
+  }
+
+  ///////////////////////////////////////////////
+  // PLUGIN RELATED METHODS TO BE EXTRACTED TO SEPARATE CLASS?
+
+  private async handleEmbeddedPluginMessage(message: PluginToHostMessage) {
+    if (message.type === 'p_request__room_broadcast' || message.type === 'PLUGIN_SEND_TO_ALL_PEERS') await this.handlePluginBroadcastMessage(message);
+    else if (message.type === 'p_request__message_user') await this.handlePluginMessageUserMessage(message);
+    else if (message.type === 'p_request__local_user') await this.handlePluginRequestLocalUserMessage(message);
+    else if (message.type === 'p_request__current_room') await this.handlePluginRequestCurrentRoomMessage(message);
+    else if (message.type === 'p_request__connected_users') await this.handlePluginRequestConnectedUsersMessage(message);
+    else if (message.type === 'p_request__set_microphone_enabled') await this.handlePluginSetMicrophoneEnabledMessage(message);
+    else if (message.type === 'p_request__set_camera_enabled') await this.handlePluginSetCameraEnabledMessage(message);
+    else if (message.type === 'p_request__get_metadata') await this.handlePluginGetMetadataMessage(message);
+    else if (message.type === 'p_request__set_metadata') await this.handlePluginSetMetadataMessage(message);
+    else throw new Error(`handlePluginMessage - unknown message type: ${message}`);
+  }
+  async handlePluginSetMetadataMessage(message: IPSetMetadata) {
+    // TODO does nothing right now
+    this.sendMessageToEmbeddedPlugin<IPSetMetadataResponse>({ type: 'p_response__set_metadata', awaitId: message.awaitId, timestamp: Date.now() });
+  }
+  async handlePluginGetMetadataMessage(message: IPGetMetadata) {
+    // TODO does nothing right now
+    this.sendMessageToEmbeddedPlugin<IPSetCameraEnabledResponse>({ type: 'p_response__set_camera_enabled', awaitId: message.awaitId, timestamp: Date.now() });
+  }
+
+  async handlePluginSetCameraEnabledMessage(message: IPSetCameraEnabled) {
+    await this.toggleCameraEnabled(message.enabled);
+    this.sendMessageToEmbeddedPlugin<IPSetCameraEnabledResponse>({ type: 'p_response__set_camera_enabled', awaitId: message.awaitId, timestamp: Date.now() });
+  }
+
+  async handlePluginSetMicrophoneEnabledMessage(message: IPSetMicrophoneEnabled) {
+    await this.toggleMicrophoneEnabled(message.enabled);
+    this.sendMessageToEmbeddedPlugin<IPSetMicrophoneEnabledResponse>({ type: 'p_response__set_microphone_enabled', awaitId: message.awaitId, timestamp: Date.now() });
+  }
+
+  async handlePluginRequestConnectedUsersMessage(message: IPGetConnectedUsers) {
+    const connectedUserIds = Array.from(this.connections.keys());
+    // TODO this may be an issue when we don't have userdata for all connections
+    const connectedUsers = connectedUserIds.map(id => this.users.get(id)).filter(Boolean) as Q.IUser[];
+    this.sendMessageToEmbeddedPlugin<IPGetConnectedUsersResponse>({ type: 'p_response__connected_users', awaitId: message.awaitId, connectedUsers, timestamp: Date.now() });
+  }
+
+  async handlePluginRequestCurrentRoomMessage(message: IPGetCurrentRoom) {
+    this.sendMessageToEmbeddedPlugin<IPGetCurrentRoomResponse>({ type: 'p_response__current_room', awaitId: message.awaitId, currentRoom: this.currentRoom!, timestamp: Date.now() });
+  }
+
+  async handlePluginRequestLocalUserMessage(message: IPGetLocalUser) {
+    this.sendMessageToEmbeddedPlugin<IPGetLocalUserResponse>({ type: 'p_response__local_user', awaitId: message.awaitId, localUser: this.localUser, timestamp: Date.now() });
+  }
+
+  private async handlePluginBroadcastMessage({awaitId, eventType, body}: IPBroadcastMessage) {
+    if (!this.localUser?.id) return console.error('handlePluginBroadcastMessage - localUser not set');
+    const enveloped: IPMessageEnvelope  = { type: 'PLUGIN_DATA', awaitId, senderId: this.localUser.id,  payload: { eventType, data: body, body } };
+    // For now we just send the message to all connections. This is different than the broadcast relay message which is sent to the server and then relayed to all users of the room.
+    // The plugin itself has to verify wheather all necessary users received the message if that is required.
+    this.connections.forEach(c => this.sendDataToConnection(c.defaultDataChannel, enveloped));
+  }
+
+  private async handlePluginMessageUserMessage({awaitId, body, eventType, receiverId}: IPMessageUserMessage) {
+    const connection = this.connections.get(receiverId);
+    if (!connection) return console.error('handlePluginMessageUserMessage - connection not found');
+    if (!this.localUser?.id) return console.error('handlePluginMessageUserMessage - localUser not set');
+    this.sendDataToConnection(connection.defaultDataChannel, { type: 'PLUGIN_DATA', awaitId, senderId: this.localUser.id, payload: {eventType, body, data: body} });
+  }
+
+  sendDataToConnection(dataChannel: RTCDataChannel, data: IPMessageEnvelope) {
+    console.log('sendDataToConnection', dataChannel, data);
+    if (!dataChannel) return;
+    const serializedData = JSON.stringify(data);
+    dataChannel.send(serializedData);
   }
 }
 
