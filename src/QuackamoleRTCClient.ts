@@ -31,7 +31,7 @@ export class QuackamoleRTCClient {
     this.socket.onclose = evt => this.onsocketstatus('closed', evt);
     this.socket.onerror = evt => this.onsocketstatus('error', evt);
     this.iframeContainerLocator = iframeContainerLocator;
-    window.addEventListener('message', evt => evt.data.type && evt.data.type.startsWith('PLUGIN') && this.handleEmbeddedPluginMessage(evt.data));
+    window.addEventListener('message', evt => evt.data.type && this.handleEmbeddedPluginMessage(evt.data));
   }
 
   onconnection = (id: string, connection: Q.PeerConnection | null) => console.debug('onconnection', id, connection);
@@ -68,7 +68,6 @@ export class QuackamoleRTCClient {
     const message: Q.IPluginSetMessage = { type: 'request__plugin_set', awaitId, body: { plugin, iframeId: this.iframe.id, roomId: this.currentRoom.id } };
     this.socket.send(JSON.stringify(message));
     const res = await promise;
-    console.log('--------set plugin res', res);
     this.currentPlugin = plugin;
     this.iframe.src = plugin.url;
     this.onsetplugin(res.plugin, res.iframeId);
@@ -195,23 +194,27 @@ export class QuackamoleRTCClient {
       if ((m as Q.IMessageRelayDeliveryMessage<Q.IRTCIceCandidatesMessage>).relayData?.type === 'ice_candidates') return this.handleRTCIceCandidates(m as Q.IMessageRelayDeliveryMessage<Q.IRTCIceCandidatesMessage>);
       if ((m as Q.IMessageRelayDeliveryMessage<Q.IRTCSessionDescriptionMessage>).relayData?.type === 'session_description') return this.handleSessionDescription(m as Q.IMessageRelayDeliveryMessage<Q.IRTCSessionDescriptionMessage>);
     }
-    if (m.type === 'room_event__user_joined') return this.handleUserJoined(m.data);
-    else if (m.type === 'room_event__user_left') return this.handleUserLeft(m.data);
-    else if (m.type === 'room_event__plugin_set') return this.handleSetPlugin(m.data);
+    if (m.type === 'room_event__user_joined') return this.handleUserJoined(m);
+    else if (m.type === 'room_event__user_left') return this.handleUserLeft(m);
+    else if (m.type === 'room_event__plugin_set') return this.handleSetPlugin(m);
     // else if (m.type === 'room_event__layout_changed') return this.handleLayoutChange(m.data.user);
   }
 
-  private async handleUserJoined({ user }: Q.IRoomEventJoinMessage['data']) {
+  private async handleUserJoined(msg: Q.IRoomEventJoinMessage) {
+    const { user } = msg.data;
     user.stream = this.streams.get(user.id);
     this.onremoteuserdata(user.id, user);
+    this.sendMessageToEmbeddedPlugin(msg);
     this.users.set(user.id, user);
   }
 
-  private async handleUserLeft({ user }: Q.IRoomEventLeaveMessage['data']) {
-    this.removeConnection(user.id);
+  private async handleUserLeft(msg: Q.IRoomEventLeaveMessage) {
+    this.sendMessageToEmbeddedPlugin(msg);
+    this.removeConnection(msg.data.user.id);
   }
 
-  handleSetPlugin({ iframeId, plugin }: Q.IRoomEventPluginSet['data']) {
+  handleSetPlugin(msg: Q.IRoomEventPluginSet) {
+    const { iframeId, plugin } = msg.data;
     console.log(`remote user set plugin ${plugin?.url} for ${iframeId}`, this.iframe);
     if (!this.iframe) {
       this.iframe = document.createElement('iframe');
@@ -256,7 +259,7 @@ export class QuackamoleRTCClient {
   }
 
   private handleDataChannelMessages(messageRaw: string) {
-    const message = JSON.parse(messageRaw);
+    const message: IPMessageEnvelope = JSON.parse(messageRaw);
     console.log('handleDataChannelMessages', message);
     if (message.type === 'PLUGIN_DATA') this.sendMessageToEmbeddedPlugin(message);
   }
@@ -274,8 +277,9 @@ export class QuackamoleRTCClient {
 
   private sendMessageToEmbeddedPlugin<T = unknown>(message: T) {
     if (!this.iframe) throw new Error('iframe not set');
+    console.log('Sending message to embedded plugin...', this.iframe.contentWindow, message);
     this.iframe.contentWindow?.postMessage(message, '*');
-    window.postMessage(message, '*');
+    // window.postMessage(message, '*');
   }
 
   private async createConnection(remoteSocketId: string, createDataChannel = true): Promise<Q.PeerConnection> {
@@ -409,7 +413,11 @@ export class QuackamoleRTCClient {
   // PLUGIN RELATED METHODS TO BE EXTRACTED TO SEPARATE CLASS?
 
   private async handleEmbeddedPluginMessage(message: PluginToHostMessage) {
-    if (message.type === 'p_request__room_broadcast' || message.type === 'PLUGIN_SEND_TO_ALL_PEERS') await this.handlePluginBroadcastMessage(message);
+    console.log('handleEmbeddedPluginMessage message:', message);
+    // eslint-disable-next-line no-debugger, @typescript-eslint/ban-ts-comment
+    // @ts-ignore - this is for legacy reasons until old plugins get updated
+    if (message.type === 'PLUGIN_SEND_TO_ALL_PEERS') await this.handlePluginBroadcastMessage({ type: 'p_request__room_broadcast', body: message.payload.data, data: message.payload.data, awaitId: '', timestamp: Date.now(), pluginId: '', eventType: message.payload.eventType });
+    if (message.type === 'p_request__room_broadcast') await this.handlePluginBroadcastMessage(message);
     else if (message.type === 'p_request__message_user') await this.handlePluginMessageUserMessage(message);
     else if (message.type === 'p_request__local_user') await this.handlePluginRequestLocalUserMessage(message);
     else if (message.type === 'p_request__current_room') await this.handlePluginRequestCurrentRoomMessage(message);
@@ -454,15 +462,21 @@ export class QuackamoleRTCClient {
     this.sendMessageToEmbeddedPlugin<IPGetLocalUserResponse>({ type: 'p_response__local_user', awaitId: message.awaitId, localUser: this.localUser, timestamp: Date.now() });
   }
 
-  private async handlePluginBroadcastMessage({awaitId, eventType, body}: IPBroadcastMessage) {
+  private async handlePluginBroadcastMessage(message: IPBroadcastMessage) {
+    const {awaitId, eventType, body} = message;
     if (!this.localUser?.id) return console.error('handlePluginBroadcastMessage - localUser not set');
+    // eslint-disable-next-line no-debugger
+    debugger;
     const enveloped: IPMessageEnvelope  = { type: 'PLUGIN_DATA', awaitId, senderId: this.localUser.id,  payload: { eventType, data: body, body } };
     // For now we just send the message to all connections. This is different than the broadcast relay message which is sent to the server and then relayed to all users of the room.
     // The plugin itself has to verify wheather all necessary users received the message if that is required.
     this.connections.forEach(c => this.sendDataToConnection(c.defaultDataChannel, enveloped));
   }
 
-  private async handlePluginMessageUserMessage({awaitId, body, eventType, receiverId}: IPMessageUserMessage) {
+  private async handlePluginMessageUserMessage(message: IPMessageUserMessage) {
+    const {awaitId, receiverId, eventType, body} = message;
+    // eslint-disable-next-line no-debugger
+    debugger;
     const connection = this.connections.get(receiverId);
     if (!connection) return console.error('handlePluginMessageUserMessage - connection not found');
     if (!this.localUser?.id) return console.error('handlePluginMessageUserMessage - localUser not set');

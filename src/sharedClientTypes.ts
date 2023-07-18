@@ -11,14 +11,15 @@ export type PluginToHostMessage = IPBroadcastMessage | IPMessageUserMessage | IP
 export interface IPBasePluginToHostMessage {
   awaitId: AwaitId;
   pluginId: PluginId;
-  body: unknown; // Imagine it like the body of an http request
+  // body: ; // Imagine it like the body of an http request
   timestamp: number; // set immdiately by sendingPeer before sending
 }
 
 export interface IPBroadcastMessage<T = unknown> extends IPBasePluginToHostMessage {
-  type: 'p_request__room_broadcast' | 'PLUGIN_SEND_TO_ALL_PEERS';
+  type: 'p_request__room_broadcast';
   eventType: string;
   body: T;
+  data?: T; // legacy alias for body
 }
 
 export interface IPMessageUserMessage<T = unknown> extends IPBasePluginToHostMessage {
@@ -76,14 +77,14 @@ export interface IPSubscribeToRoomEvent extends IPBasePluginToHostMessage {
 }
 
 // This message type is special not sure in which category to put it
-export interface IPMessageEnvelope {
+export interface IPMessageEnvelope<T = unknown> {
   // type: 'p_message_envelope';
   type: 'PLUGIN_DATA'; // used by legacy project
   awaitId: AwaitId;
   senderId: SocketId; // set by server to prevent malicious users from pretending to send messages as someone else
   payload: {
     eventType: string;
-    data: unknown;
+    data: T;
     body: unknown; // data === body for legacy reasons (data is an alias for the body)
   };
 }
@@ -93,6 +94,7 @@ export interface IPMessageEnvelope {
 /////////////////////////////
 
 export type PluginToHostResponse = IPBroadcastResponse | IPMessagePeerResponse | IPGetLocalUserResponse | IPGetCurrentRoomResponse | IPGetConnectedUsersResponse | IPSetMicrophoneEnabledResponse | IPSetCameraEnabledResponse | IPSetMetadataResponse | IPGetMetadataResponse | IHighlightUserResponse | IPSubscribeToRoomEventResponse;
+export type HostToPluginMessage = PluginToHostResponse | IPluginResponseErrorMessage;
 
 // Messages sent by host back to the plugin in response to a request
 
@@ -155,6 +157,7 @@ export interface IPSubscribeToRoomEventResponse extends IPluginResponseMessage {
 }
 
 export interface IPluginResponseErrorMessage {
+  awaitId: AwaitId;
   type: 'p_response__error';
   requestType: PluginToHostMessage['type'];
   message: string;
