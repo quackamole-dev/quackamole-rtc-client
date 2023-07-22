@@ -11,8 +11,8 @@ export class QuackamoleRTCClient {
 
   private localUser: Q.IUser | null = null;
   private localStream: MediaStream | undefined;
-  private localStreamMicEnabled = false;
-  private localStreamCamEnabled = false;
+  private localStreamMicEnabled = true;
+  private localStreamCamEnabled = true;
   private readonly localStreamConstraints: MediaStreamConstraints = defaultMediaConstraints;
 
   private iframe: HTMLIFrameElement | null = null;
@@ -40,14 +40,13 @@ export class QuackamoleRTCClient {
   onsocketstatus = (status: 'open' | 'closed' | 'error', evt?: Event) => console.debug('onsocketstatus', status, evt);
   onsetplugin = (plugin: Q.IPlugin | null, iframeId: string) => console.debug('onsetplugin', plugin, iframeId);
 
-  async toggleMicrophoneEnabled(override?: boolean): Promise<void> {
-    this.localStreamMicEnabled =  override !== undefined ? override : !this.localStreamMicEnabled;
+  async toggleMicrophoneEnabled(): Promise<void> {
+    this.localStreamMicEnabled = !this.localStreamMicEnabled;
     if (this.localStream || this.localStreamMicEnabled) await this.startLocalStream();
   }
 
-  async toggleCameraEnabled(override?: boolean): Promise<void> {
-    this.localStreamCamEnabled =  override !== undefined ? override : !this.localStreamCamEnabled;
-    this.localStreamCamEnabled = !this.localStreamCamEnabled;
+  async toggleCameraEnabled(): Promise<void> {
+    this.localStreamCamEnabled =  !this.localStreamCamEnabled;
     if (this.localStream || this.localStreamCamEnabled) await this.startLocalStream();
   }
 
@@ -396,7 +395,8 @@ export class QuackamoleRTCClient {
     stream.getTracks().forEach(track => track.stop());
   };
 
-  private registerAwaitIdPromise<T>(awaitId = crypto.randomUUID()): [Q.AwaitId, Promise<T>] {
+  private registerAwaitIdPromise<T>(): [Q.AwaitId, Promise<T>] {
+    const awaitId = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
     let resolve: Q.IAwaitedPromise['resolve'] = () => console.debug('resolve not set');
     let reject: Q.IAwaitedPromise['resolve'] = () => console.debug('reject not set');
     const promise: Promise<T> = new Promise((res, rej) => {
@@ -438,12 +438,12 @@ export class QuackamoleRTCClient {
   }
 
   async handlePluginSetCameraEnabledMessage(message: IPSetCameraEnabled) {
-    await this.toggleCameraEnabled(message.enabled);
+    // await this.toggleCameraEnabled(message.enabled);
     this.sendMessageToEmbeddedPlugin<IPSetCameraEnabledResponse>({ type: 'p_response__set_camera_enabled', awaitId: message.awaitId, timestamp: Date.now() });
   }
 
   async handlePluginSetMicrophoneEnabledMessage(message: IPSetMicrophoneEnabled) {
-    await this.toggleMicrophoneEnabled(message.enabled);
+    // await this.toggleMicrophoneEnabled(message.enabled);
     this.sendMessageToEmbeddedPlugin<IPSetMicrophoneEnabledResponse>({ type: 'p_response__set_microphone_enabled', awaitId: message.awaitId, timestamp: Date.now() });
   }
 

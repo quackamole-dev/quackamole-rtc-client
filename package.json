@@ -1,6 +1,6 @@
 {
   "name": "quackamole-rtc-client",
-  "version": "0.1.0",
+  "version": "0.1.3",
   "type": "module",
   "main": "./dist/quackamole-rtc-client.umd.cjs",
   "module": "./dist/quackamole-rtc-client.js",

@@ -59,7 +59,8 @@ export class BaseQuackamoleSDK extends EventEmitter {
     else if (msg.type === 'PLUGIN_DATA') this.emit(msg.payload.eventType, msg.payload.data);
   }
 
-  private registerAwaitIdPromise<T>(awaitId = crypto.randomUUID()): [AwaitId, Promise<T>] {
+  private registerAwaitIdPromise<T>(): [AwaitId, Promise<T>] {
+    const awaitId = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
     let resolve: IAwaitedPromise['resolve'] = () => console.debug('resolve not set');
     let reject: IAwaitedPromise['resolve'] = () => console.debug('reject not set');
     const promise: Promise<T> = new Promise((res, rej) => {
