@@ -115,7 +115,7 @@ export interface IPMessagePeerResponse extends IPluginResponseMessage {
 
 export interface IPGetLocalUserResponse extends IPluginResponseMessage {
   type: 'p_response__local_user';
-  localUser: IUser | null;
+  localUser: IUser | undefined;
 }
 
 export interface IPGetConnectedUsersResponse extends IPluginResponseMessage {

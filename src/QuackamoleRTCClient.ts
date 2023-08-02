@@ -1,25 +1,20 @@
 import * as Q from 'quackamole-shared-types';
 import { QuackamoleHttpClient } from '.';
-import { IPBroadcastMessage, IPGetCurrentRoom, IPGetCurrentRoomResponse, IPGetLocalUser, IPGetLocalUserResponse, IPGetMetadata, IPGetConnectedUsers, IPGetConnectedUsersResponse, IPMessageEnvelope, IPMessageUserMessage, IPSetCameraEnabled, IPSetMetadata, IPSetMicrophoneEnabled, PluginToHostMessage, IPSetMicrophoneEnabledResponse, IPSetCameraEnabledResponse, IPSetMetadataResponse } from './sharedClientTypes';
+import { IPBroadcastMessage, IPGetCurrentRoom, IPGetCurrentRoomResponse, IPGetLocalUser, IPGetLocalUserResponse, IPGetMetadata, IPGetConnectedUsers, IPGetConnectedUsersResponse, IPMessageEnvelope, IPMessageUserMessage, IPSetCameraEnabled, IPSetMetadata, IPSetMicrophoneEnabled, PluginToHostMessage, IPSetMicrophoneEnabledResponse, IPSetCameraEnabledResponse, IPSetMetadataResponse, IPluginResponseErrorMessage } from './sharedClientTypes';
 
 export class QuackamoleRTCClient {
   readonly http = QuackamoleHttpClient;
+  readonly localUserInfo: IUserInfo = { user: undefined, stream: undefined, micEnabled: true, camEnabled: true };
+  readonly remoteUserInfoMap: Record<Q.IUser['id'], IUserInfo> = {};
+  readonly localStreamConstraints: MediaStreamConstraints = defaultMediaConstraints;
   private socket: WebSocket;
   private socketId: string | null = null;
   private currentRoom: Q.IBaseRoom | null = null;
   private currentPlugin: Q.IPlugin | null = null;
-
-  private localUser: Q.IUser | null = null;
-  private localStream: MediaStream | undefined;
-  private localStreamMicEnabled = true;
-  private localStreamCamEnabled = true;
-  private readonly localStreamConstraints: MediaStreamConstraints = defaultMediaConstraints;
-
   private iframe: HTMLIFrameElement | null = null;
+
   private readonly awaitedPromises: Record<Q.AwaitId, Q.IAwaitedPromise> = {};
   private readonly connections: Map<Q.IUser['id'], Q.PeerConnection> = new Map();
-  private readonly streams: Map<Q.IUser['id'], MediaStream> = new Map();
-  private readonly users: Map<Q.IUser['id'], Q.IUser> = new Map();
   private readonly iframeContainerLocator: string;
 
   constructor(apiUrl: string, websocketUrl: string, secure: boolean, iframeContainerLocator: string) {
@@ -32,22 +27,23 @@ export class QuackamoleRTCClient {
     this.socket.onerror = evt => this.onsocketstatus('error', evt);
     this.iframeContainerLocator = iframeContainerLocator;
     window.addEventListener('message', evt => evt.data.type && this.handleEmbeddedPluginMessage(evt.data));
+    setTimeout(() => this.onlocaluserdata({ ...this.localUserInfo }), 0);
   }
 
-  onconnection = (id: string, connection: Q.PeerConnection | null) => console.debug('onconnection', id, connection);
-  onremoteuserdata = (id: string, userData: Q.IUser | null) => console.debug('onremoteuserdata', id, userData);
-  onlocaluserdata = (userData: Q.IUser) => console.debug('onlocaluserdata', userData);
+  // onconnection = (id: string, connection: Q.PeerConnection | null) => console.debug('onconnection', id, connection);
+  onremoteuserdata = (id: Q.UserId, value: IUserInfo | undefined) => console.debug('onremoteuserdata', id, value);
+  onlocaluserdata = (value: IUserInfo) => console.debug('onlocaluserdata', value);
   onsocketstatus = (status: 'open' | 'closed' | 'error', evt?: Event) => console.debug('onsocketstatus', status, evt);
   onsetplugin = (plugin: Q.IPlugin | null, iframeId: string) => console.debug('onsetplugin', plugin, iframeId);
 
   async toggleMicrophoneEnabled(): Promise<void> {
-    this.localStreamMicEnabled = !this.localStreamMicEnabled;
-    if (this.localStream || this.localStreamMicEnabled) await this.startLocalStream();
+    this.localUserInfo.micEnabled = !this.localUserInfo.micEnabled;
+    if (this.localUserInfo.stream || this.localUserInfo.micEnabled) await this.startLocalStream();
   }
 
   async toggleCameraEnabled(): Promise<void> {
-    this.localStreamCamEnabled =  !this.localStreamCamEnabled;
-    if (this.localStream || this.localStreamCamEnabled) await this.startLocalStream();
+    this.localUserInfo.camEnabled = !this.localUserInfo.camEnabled;
+    if (this.localUserInfo.stream || this.localUserInfo.camEnabled) await this.startLocalStream();
   }
 
   async setPlugin(plugin: Q.IPlugin): Promise<void> {
@@ -82,18 +78,17 @@ export class QuackamoleRTCClient {
     this.socket.send(JSON.stringify(message));
     const response = await promise;
 
-    // if (response.errors?.length) return new Error(response.errors?.join(', '));
     if (response.secret.length === 0) return new Error('secret is empty');
 
     localStorage.setItem('secret', response.secret);
-    this.onlocaluserdata({ ...response.user });
+    // this.onlocaluserdata({ ...response.user });
     return response.user;
   }
 
   async loginUser(): Promise<Q.IUser | Error> {
     const secret = localStorage.getItem('secret'); // TODO allow adapters to change behaviour or move login and register completely to a AnonymousLoginAdapter
     console.log('trying to login user with secret', secret);
-    if (this.localUser) return new Error('already logged in');
+    if (this.localUserInfo.user) return new Error('already logged in');
     if (!secret) return new Error('secret not found. Please register first');
     if (!this.socket) return new Error('socket undefined');
     if (this.socket.readyState !== WebSocket.OPEN) return new Error('socket not open');
@@ -104,9 +99,8 @@ export class QuackamoleRTCClient {
     // if (response.errors?.length) return new Error(response.errors?.join(', '));
     console.log('loginUser success with socketId', response);
     this.socketId = response.user.id;
-    this.localUser = response.user;
-    this.localUser.stream = this.localStream;
-    this.onlocaluserdata({ ...response.user });
+    this.localUserInfo.user = response.user;
+    this.onlocaluserdata({ ...this.localUserInfo });
     return response.user;
   }
 
@@ -121,10 +115,11 @@ export class QuackamoleRTCClient {
     const response = await promise;
     // if (response.errors?.length) return new Error(response.errors?.join(', '));
     this.currentRoom = response.room;
-    response.users.forEach(u => {
-      if (u.id === this.localUser?.id) return;
-      this.users.set(u.id, u);
-      this.onremoteuserdata(u.id, u);
+    response.users.forEach(user => {
+      if (user.id === this.localUserInfo.user?.id) return;
+      const info = this.remoteUserInfoMap[user.id] || {} as IUserInfo;
+      info.user = user;
+      this.onremoteuserdata(user.id, {...info});
     });
     await this.startLocalStream();
 
@@ -139,37 +134,31 @@ export class QuackamoleRTCClient {
   }
 
   async startLocalStream(): Promise<MediaStream | Error> {
-    // if (!this.localStreamMicEnabled && !this.localStreamCamEnabled)
-    const audioTracks = this.localStream?.getAudioTracks();
-    const videoTracks = this.localStream?.getVideoTracks();
-    if (audioTracks?.length && !this.localStreamMicEnabled) audioTracks.forEach(t => t.stop());
-    if (videoTracks?.length && !this.localStreamCamEnabled) videoTracks.forEach(t => t.stop());
-    // await this.stopLocalStream(); // TODO instead of completely stopping the stream, just remove the tracks that are not needed anymore
-    if (!this.localUser) return new Error('local user not set');
+    await this.stopLocalStream();
     const actualConstraints = { ...this.localStreamConstraints };
-    actualConstraints.audio = this.localStreamMicEnabled ? actualConstraints.audio : false;
-    actualConstraints.video = this.localStreamCamEnabled ? actualConstraints.video : false;
+    actualConstraints.audio = this.localUserInfo.micEnabled ? actualConstraints.audio : false;
+    actualConstraints.video = this.localUserInfo.camEnabled ? actualConstraints.video : false;
 
     try {
-      console.log('startLocalStream', this.localStreamMicEnabled, this.localStreamCamEnabled, actualConstraints);
-      this.localStream = await navigator.mediaDevices.getUserMedia(actualConstraints);
-      this.localUser.stream = this.localStream;
-      this.onlocaluserdata({ ...this.localUser });
-      await this.updateStreamForConnections(this.localStream);
-      return this.localStream;
+      console.log('startLocalStream - user info', this.localUserInfo, actualConstraints);
+      this.localUserInfo.stream = await navigator.mediaDevices.getUserMedia(actualConstraints);
+      this.onlocaluserdata({ ...this.localUserInfo });
+      await this.updateStreamForConnections(this.localUserInfo.stream);
+      return this.localUserInfo.stream;
     } catch (error) {
-      this.localUser.stream = undefined;
-      this.onlocaluserdata({ ...this.localUser });
+      this.localUserInfo.stream = undefined;
+      this.onlocaluserdata({ ...this.localUserInfo });
+      await this.updateStreamForConnections(undefined);
       return new Error('local stream couldn\'t be started');
     }
   }
 
-  private async stopLocalStream() {
-    if (!this.localStream) return;
+  async stopLocalStream() {
+    if (!this.localUserInfo.stream) return;
     console.log('stopLocalStream');
-    this.clearStreamTracks(this.localStream);
-    this.localStream = undefined;
-    this.updateStreamForConnections(this.localStream);
+    this.clearStreamTracks(this.localUserInfo.stream);
+    this.localUserInfo.stream = undefined;
+    // notifyConnections && this.updateStreamForConnections(undefined);
   }
 
   private async updateStreamForConnections(newStream?: MediaStream): Promise<void> {
@@ -201,10 +190,11 @@ export class QuackamoleRTCClient {
 
   private async handleUserJoined(msg: Q.IRoomEventJoinMessage) {
     const { user } = msg.data;
-    user.stream = this.streams.get(user.id);
-    this.onremoteuserdata(user.id, user);
+    const info = this.remoteUserInfoMap[user.id] || {} as IUserInfo;
+    info.user = user;
+    this.onremoteuserdata(user.id, { ...info });
     this.sendMessageToEmbeddedPlugin(msg);
-    this.users.set(user.id, user);
+    this.remoteUserInfoMap[user.id] = info;
   }
 
   private async handleUserLeft(msg: Q.IRoomEventLeaveMessage) {
@@ -234,19 +224,21 @@ export class QuackamoleRTCClient {
 
     if (message.relayData.description.type === 'offer') {
       console.log(`You received an OFFER from "${message.senderId}"...`);
-      if (!connection) connection = await this.createConnection(message.senderId, false);
+      if (!connection) connection = await this.createConnection(message.senderId);
       await connection.setRemoteDescription(new RTCSessionDescription(message.relayData.description));
       await this.sendSessionDescriptionToConnection(connection, false);
       // When remote user disabled both cam and mic, we need to remove the stream here otherwise it remains stuck on last frame here.
-      const user = this.users.get(message.senderId);
-      if (user && !message.relayData.streamEnabled) {
-        user.stream = undefined;
-        this.onremoteuserdata(message.senderId, { ...user });
-      }
+      const info = this.remoteUserInfoMap[message.senderId] || {} as IUserInfo;
+      info.micEnabled = message.relayData.micEnabled;
+      info.camEnabled = message.relayData.camEnabled;
+      info.stream = message.relayData.streamEnabled ? info.stream : undefined;
+      this.onremoteuserdata(message.senderId, { ...info});
     } else if (message.relayData.description.type === 'answer') {
       if (!connection) return console.error('No offer was ever made for the received answer. Investigate!');
       console.log(`You received an ANSWER from "${message.senderId}"...`);
       await connection.setRemoteDescription(new RTCSessionDescription(message.relayData.description));
+    } else {
+      throw new Error(`handleSessionDescription - unknown description type: ${message.relayData.description.type}`);
     }
   }
 
@@ -269,19 +261,20 @@ export class QuackamoleRTCClient {
     const description = isOffer ? await connection.createOffer() : await connection.createAnswer();
     await connection.setLocalDescription(description);
     console.log('Sending description to remote peer...', description);
-    const relayData: Q.IRTCSessionDescriptionMessage  = { type: 'session_description', description, senderSocketId: this.socketId, micEnabled: this.localStreamMicEnabled, camEnabled: this.localStreamCamEnabled, streamEnabled: Boolean(this.localStream) };
+    const relayData: Q.IRTCSessionDescriptionMessage  = { type: 'session_description', description, senderSocketId: this.socketId, micEnabled: Boolean(this.localUserInfo.micEnabled), camEnabled: Boolean(this.localUserInfo.camEnabled), streamEnabled: Boolean(this.localUserInfo.stream) };
     const message: Q.IMessageRelayMessage<Q.IRTCSessionDescriptionMessage> = { type: 'request__message_relay', awaitId: '', body: { receiverIds: [connection.remoteSocketId], roomId: this.currentRoom?.id, relayData } };
     this.socket.send(JSON.stringify(message));
   };
 
   private sendMessageToEmbeddedPlugin<T = unknown>(message: T) {
-    if (!this.iframe) throw new Error('iframe not set');
+    // if (!this.iframe) throw new Error('iframe not set');
+    if (!this.iframe) return console.error('ATTENTION: iframe reference not set');
     console.log('Sending message to embedded plugin...', this.iframe.contentWindow, message);
     this.iframe.contentWindow?.postMessage(message, '*');
     // window.postMessage(message, '*');
   }
 
-  private async createConnection(remoteSocketId: string, createDataChannel = true): Promise<Q.PeerConnection> {
+  private async createConnection(remoteSocketId: string): Promise<Q.PeerConnection> {
     if (!this.socketId) throw new Error('socketId not defined');
     if (this.socketId === remoteSocketId) throw new Error('cannot connect with yourself');
     if (this.connections.has(remoteSocketId)) return this.connections.get(remoteSocketId) as Q.PeerConnection;
@@ -289,19 +282,17 @@ export class QuackamoleRTCClient {
 
     const newConnection = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }], iceCandidatePoolSize: 1 }) as Q.PeerConnection;
     newConnection.remoteSocketId = remoteSocketId;
-    if (createDataChannel) {
-      newConnection.defaultDataChannel = newConnection.createDataChannel('default');
-      this.setupDataChannelListeners(newConnection.defaultDataChannel);
-    }
+    newConnection.defaultDataChannel = newConnection.createDataChannel('default');
+    this.setupDataChannelListeners(newConnection.defaultDataChannel);
     this.setupConnectionListeners(newConnection);
 
     this.connections.set(remoteSocketId, newConnection);
-    this.onconnection(newConnection.remoteSocketId, newConnection);
+    // this.onconnection(newConnection.remoteSocketId, newConnection);
 
-    if (this.localStream) {
-      const tracks = this.localStream.getTracks();
+    if (this.localUserInfo.stream) {
+      const tracks = this.localUserInfo.stream.getTracks();
       console.log(`Adding ${tracks.length}x stream tracks to the new RTCPeerConnection with "${remoteSocketId}"...`);
-      for (const track of tracks) newConnection.addTrack(track, this.localStream);
+      for (const track of tracks) newConnection.addTrack(track, this.localUserInfo.stream);
     }
 
     return newConnection;
@@ -315,10 +306,8 @@ export class QuackamoleRTCClient {
     if (connection.stream) this.clearStreamTracks(connection.stream);
     connection.close();
     this.connections.delete(connection.remoteSocketId);
-    this.streams.delete(connection.remoteSocketId);
-    this.users.delete(connection.remoteSocketId);
-    this.onconnection(connection.remoteSocketId, null);
-    this.onremoteuserdata(connection.remoteSocketId, null);
+    delete this.remoteUserInfoMap[connection.remoteSocketId];
+    this.onremoteuserdata(connection.remoteSocketId, undefined);
   }
 
   private setupConnectionListeners(connection: Q.PeerConnection) {
@@ -361,13 +350,10 @@ export class QuackamoleRTCClient {
 
     connection.ontrack = ({ streams }) => {
       if (!streams || !streams[0]) return console.error('ontrack - this should not happen... streams[0] is empty!');
-      this.streams.set(connection.remoteSocketId, streams[0]);
-
-      const user = this.users.get(connection.remoteSocketId);
-      if (!user) return; // no use in continuing when user not loaded yet
-
-      user.stream = streams[0];
-      this.onremoteuserdata(connection.remoteSocketId, { ...user });
+      const info = this.remoteUserInfoMap[connection.remoteSocketId] || {} as IUserInfo;
+      info.stream = streams[0];
+      console.log(`Received remote stream from "${connection.remoteSocketId}"... user info ${info}`);
+      this.onremoteuserdata(connection.remoteSocketId, { ...info });
     };
 
     connection.onnegotiationneeded = () => console.log(`(negotiationneeded for connection "${connection.remoteSocketId}"...)`);
@@ -414,7 +400,7 @@ export class QuackamoleRTCClient {
 
   private async handleEmbeddedPluginMessage(message: PluginToHostMessage) {
     console.log('handleEmbeddedPluginMessage message:', message);
-    // eslint-disable-next-line no-debugger, @typescript-eslint/ban-ts-comment
+    // eslint-disable-next-line
     // @ts-ignore - this is for legacy reasons until old plugins get updated
     if (message.type === 'PLUGIN_SEND_TO_ALL_PEERS') await this.handlePluginBroadcastMessage({ type: 'p_request__room_broadcast', body: message.payload.data, data: message.payload.data, awaitId: '', timestamp: Date.now(), pluginId: '', eventType: message.payload.eventType });
     if (message.type === 'p_request__room_broadcast') await this.handlePluginBroadcastMessage(message);
@@ -426,7 +412,7 @@ export class QuackamoleRTCClient {
     else if (message.type === 'p_request__set_camera_enabled') await this.handlePluginSetCameraEnabledMessage(message);
     else if (message.type === 'p_request__get_metadata') await this.handlePluginGetMetadataMessage(message);
     else if (message.type === 'p_request__set_metadata') await this.handlePluginSetMetadataMessage(message);
-    else throw new Error(`handlePluginMessage - unknown message type: ${message}`);
+    else this.sendMessageToEmbeddedPlugin<IPluginResponseErrorMessage>({ type: 'p_response__error', awaitId: message.awaitId, requestType: message.type, message: 'unknown request type', code: 400 });
   }
   async handlePluginSetMetadataMessage(message: IPSetMetadata) {
     // TODO does nothing right now
@@ -450,7 +436,7 @@ export class QuackamoleRTCClient {
   async handlePluginRequestConnectedUsersMessage(message: IPGetConnectedUsers) {
     const connectedUserIds = Array.from(this.connections.keys());
     // TODO this may be an issue when we don't have userdata for all connections
-    const connectedUsers = connectedUserIds.map(id => this.users.get(id)).filter(Boolean) as Q.IUser[];
+    const connectedUsers = connectedUserIds.map(id => this.remoteUserInfoMap[id]).filter(Boolean) as Q.IUser[];
     this.sendMessageToEmbeddedPlugin<IPGetConnectedUsersResponse>({ type: 'p_response__connected_users', awaitId: message.awaitId, connectedUsers, timestamp: Date.now() });
   }
 
@@ -459,15 +445,13 @@ export class QuackamoleRTCClient {
   }
 
   async handlePluginRequestLocalUserMessage(message: IPGetLocalUser) {
-    this.sendMessageToEmbeddedPlugin<IPGetLocalUserResponse>({ type: 'p_response__local_user', awaitId: message.awaitId, localUser: this.localUser, timestamp: Date.now() });
+    this.sendMessageToEmbeddedPlugin<IPGetLocalUserResponse>({ type: 'p_response__local_user', awaitId: message.awaitId, localUser: this.localUserInfo.user, timestamp: Date.now() });
   }
 
   private async handlePluginBroadcastMessage(message: IPBroadcastMessage) {
     const {awaitId, eventType, body} = message;
-    if (!this.localUser?.id) return console.error('handlePluginBroadcastMessage - localUser not set');
-    // eslint-disable-next-line no-debugger
-    debugger;
-    const enveloped: IPMessageEnvelope  = { type: 'PLUGIN_DATA', awaitId, senderId: this.localUser.id,  payload: { eventType, data: body, body } };
+    if (!this.localUserInfo.user?.id) return console.error('handlePluginBroadcastMessage - localUser not set');
+    const enveloped: IPMessageEnvelope  = { type: 'PLUGIN_DATA', awaitId, senderId: this.localUserInfo.user.id,  payload: { eventType, data: body, body } };
     // For now we just send the message to all connections. This is different than the broadcast relay message which is sent to the server and then relayed to all users of the room.
     // The plugin itself has to verify wheather all necessary users received the message if that is required.
     this.connections.forEach(c => this.sendDataToConnection(c.defaultDataChannel, enveloped));
@@ -475,12 +459,10 @@ export class QuackamoleRTCClient {
 
   private async handlePluginMessageUserMessage(message: IPMessageUserMessage) {
     const {awaitId, receiverId, eventType, body} = message;
-    // eslint-disable-next-line no-debugger
-    debugger;
     const connection = this.connections.get(receiverId);
     if (!connection) return console.error('handlePluginMessageUserMessage - connection not found');
-    if (!this.localUser?.id) return console.error('handlePluginMessageUserMessage - localUser not set');
-    this.sendDataToConnection(connection.defaultDataChannel, { type: 'PLUGIN_DATA', awaitId, senderId: this.localUser.id, payload: {eventType, body, data: body} });
+    if (!this.localUserInfo.user?.id) return console.error('handlePluginMessageUserMessage - localUser not set');
+    this.sendDataToConnection(connection.defaultDataChannel, { type: 'PLUGIN_DATA', awaitId, senderId: this.localUserInfo.user.id, payload: {eventType, body, data: body} });
   }
 
   sendDataToConnection(dataChannel: RTCDataChannel, data: IPMessageEnvelope) {
@@ -503,3 +485,10 @@ const defaultMediaConstraints: MediaStreamConstraints = {
 };
 
 // TODO hide away complexity and the fact that we are sending a websocket message for awaited messages, create a lower level base class handling that and inherit from it
+
+export interface IUserInfo {
+  user?: Q.IUser;
+  stream?: MediaStream;
+  micEnabled?: boolean;
+  camEnabled?: boolean;
+}
